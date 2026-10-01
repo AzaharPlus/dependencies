@@ -5,119 +5,132 @@
  if(QT_FEATURE_process AND QT_FEATURE_pushbutton AND QT_FEATURE_toolbutton
      AND QT_FEATURE_png AND QT_FEATURE_mdiarea AND QT_FEATURE_syntaxhighlighter
 -    AND TARGET Qt::Widgets AND TARGET Qt::Quick)
-+    AND TARGET Qt::Network AND TARGET Qt::Widgets)
++    AND TARGET Qt::Widgets)
      add_subdirectory(linguist)
  endif()
  
 --- a/src/linguist/linguist/CMakeLists.txt
 +++ b/src/linguist/linguist/CMakeLists.txt
-@@ -44,7 +44,6 @@ qt_internal_add_app(linguist
-         errorsview.cpp errorsview.h
-         finddialog.cpp finddialog.h finddialog.ui
-         uiformpreviewview.cpp uiformpreviewview.h
--        qmlformpreviewview.h qmlformpreviewview.cpp
-         globals.cpp globals.h
-         main.cpp
-         mainwindow.cpp mainwindow.h mainwindow.ui
-@@ -77,10 +76,9 @@ qt_internal_add_app(linguist
-         Qt::CorePrivate
-         Qt::Gui
-         Qt::GuiPrivate
-+        Qt::Network
-         Qt::UiToolsPrivate
-         Qt::Widgets
--        Qt::QuickWidgets
--        Qt::QuickLayouts
+@@ -93,14 +93,6 @@ qt_internal_extend_target(linguist CONDITION QT_FEATURE_printsupport
+         Qt::PrintSupport
  )
  
- qt_internal_extend_target(linguist CONDITION QT_FEATURE_process
+-qt_internal_extend_target(linguist CONDITION QT_BUILDING_QT
+-    SOURCES
+-        qmlformpreviewview.h qmlformpreviewview.cpp
+-    LIBRARIES
+-        Qt::QuickWidgets
+-        Qt::QuickLayouts
+-)
+-
+ if(QT_BUILDING_QT)
+     set(available_plugins "")
+ 
 --- a/src/linguist/linguist/mainwindow.cpp
 +++ b/src/linguist/linguist/mainwindow.cpp
-@@ -14,7 +14,6 @@
+@@ -14,9 +14,6 @@
  #include "finddialog.h"
  #include <helpclient.h>
  #include "uiformpreviewview.h"
--#include "qmlformpreviewview.h"
+-#ifndef Q_OS_WASM
+-#  include "qmlformpreviewview.h"
+-#endif // Q_OS_WASM
  #include "globals.h"
  #include "messageeditor.h"
  #include "messagemodel.h"
-@@ -72,11 +71,6 @@ static bool hasUiFormPreview(const QString &fileName)
+@@ -74,13 +71,6 @@ static bool hasUiFormPreview(const QString &fileName)
      return fileName.endsWith(".ui"_L1) || fileName.endsWith(".jui"_L1);
  }
  
+-#ifndef Q_OS_WASM
 -static bool hasQmlFormPreview(const QString &fileName, bool qmlPreviewChecked)
 -{
 -    return fileName.endsWith(QLatin1String(".qml")) && qmlPreviewChecked;
 -}
+-#endif // Q_OS_WASM
 -
  static const int MessageMS = 2500;
  
  } // namespace
-@@ -352,11 +346,9 @@ MainWindow::MainWindow(HelpClientType helpClientType)
-     m_sourceAndFormView = new QStackedWidget(this);
+@@ -357,10 +347,6 @@ MainWindow::MainWindow(HelpClientType helpClientType)
      m_sourceAndFormDock->setWidget(m_sourceAndFormView);
      m_uiFormPreviewView = new UiFormPreviewView(0, m_dataModel);
--    m_qmlFormPreviewView = new QmlFormPreviewView(m_dataModel);
      m_sourceCodeView = new SourceCodeView(0);
+-#ifndef Q_OS_WASM
+-    m_qmlFormPreviewView = new QmlFormPreviewView(m_dataModel);
+-    m_sourceAndFormView->addWidget(m_qmlFormPreviewView);
+-#endif // Q_OS_WASM
      m_sourceAndFormView->addWidget(m_sourceCodeView);
      m_sourceAndFormView->addWidget(m_uiFormPreviewView);
--    m_sourceAndFormView->addWidget(m_qmlFormPreviewView);
  
-     // Set up errors dock widget
-     m_errorsDock = new QDockWidget(this);
-@@ -565,7 +557,6 @@ void MainWindow::modelCountChanged()
+@@ -571,9 +557,6 @@ void MainWindow::modelCountChanged()
      m_ui.actionFindPrev->setEnabled(false);
  
      m_uiFormPreviewView->setSourceContext(-1, 0);
+-#ifndef Q_OS_WASM
 -    m_qmlFormPreviewView->setSourceContext(-1, 0);
+-#endif // Q_OS_WASM
      updateVisibleColumns();
  }
  
-@@ -1606,9 +1597,6 @@ void MainWindow::translationChanged(const MultiDataIndex &index)
+@@ -1614,11 +1597,6 @@ void MainWindow::translationChanged(const MultiDataIndex &index)
      MessageItem *m = m_dataModel->messageItem(index);
      if (hasUiFormPreview(m->fileName()))
          m_uiFormPreviewView->setSourceContext(index.model(), m);
+-#ifndef Q_OS_WASM
 -    else if (hasQmlFormPreview(m->fileName(), m_ui.actionQmlPreview->isChecked()))
 -        if (!m_qmlFormPreviewView->setSourceContext(index.model(), m))
 -            m_ui.actionQmlPreview->setChecked(false);
+-#endif // Q_OS_WASM
  }
  
  // This and the following function operate directly on the messageitem,
-@@ -1624,10 +1612,6 @@ void MainWindow::updateTranslation(const QStringList &translations)
+@@ -1634,12 +1612,6 @@ void MainWindow::updateTranslation(const QStringList &translations)
      m->setTranslations(translations);
      if (!m->fileName().isEmpty() && hasUiFormPreview(m->fileName()))
          m_uiFormPreviewView->setSourceContext(m_currentIndex.model(), m);
+-#ifndef Q_OS_WASM
 -    else if (!m->fileName().isEmpty()
 -             && hasQmlFormPreview(m->fileName(), m_ui.actionQmlPreview->isChecked()))
 -        if (!m_qmlFormPreviewView->setSourceContext(m_currentIndex.model(), m))
 -            m_ui.actionQmlPreview->setChecked(false);
+-#endif // Q_OS_WASM
      updateDanger(m_currentIndex, true);
  
      if (m->isFinished())
-@@ -2056,7 +2040,6 @@ void MainWindow::setupMenuBar()
+@@ -2068,11 +2040,7 @@ void MainWindow::setupMenuBar()
      connect(m_ui.actionDisplayGuesses, &QAction::triggered,
              m_phraseView, &PhraseView::toggleGuessing);
      connect(m_ui.actionStatistics, &QAction::triggered, this, &MainWindow::showStatistics);
+-#ifndef Q_OS_WASM
 -    connect(m_ui.actionQmlPreview, &QAction::triggered, this, &MainWindow::toggleQmlPreview);
+-#else
+     m_ui.actionQmlPreview->setVisible(false);
+-#endif // Q_OS_WASM
      connect(m_ui.actionVisualizeWhitespace, &QAction::triggered,
              this, &MainWindow::toggleVisualizeWhitespace);
      connect(m_ui.actionIncreaseZoom, &QAction::triggered,
-@@ -2166,11 +2149,7 @@ void MainWindow::updateSourceView(int model, MessageItem *item)
+@@ -2182,15 +2150,7 @@ void MainWindow::updateSourceView(int model, MessageItem *item)
          if (hasUiFormPreview(item->fileName())) {
              m_sourceAndFormView->setCurrentWidget(m_uiFormPreviewView);
              m_uiFormPreviewView->setSourceContext(model, item);
+-#ifndef Q_OS_WASM
 -        } else if (hasQmlFormPreview(item->fileName(), m_ui.actionQmlPreview->isChecked())
 -                   && m_qmlFormPreviewView->setSourceContext(model, item)) {
 -            m_sourceAndFormView->setCurrentWidget(m_qmlFormPreviewView);
+-#endif // Q_OS_WASM
          } else {
+-#ifndef Q_OS_WASM
 -            m_ui.actionQmlPreview->setChecked(false);
+-#endif // Q_OS_WASM
              m_sourceAndFormView->setCurrentWidget(m_sourceCodeView);
              QDir dir = QFileInfo(m_dataModel->srcFileName(model)).dir();
              QString fileName = QDir::cleanPath(dir.absoluteFilePath(item->fileName()));
-@@ -2774,14 +2753,6 @@ void MainWindow::showStatistics()
+@@ -2795,16 +2755,6 @@ void MainWindow::showStatistics()
      updateStatistics();
  }
  
+-#ifndef Q_OS_WASM
 -void MainWindow::toggleQmlPreview()
 -{
 -    if (m_ui.actionQmlPreview->isChecked())
@@ -125,70 +138,40 @@
 -    else
 -        m_sourceAndFormView->setCurrentWidget(m_sourceCodeView);
 -}
+-#endif // Q_OS_WASM
 -
  void MainWindow::toggleVisualizeWhitespace()
  {
      m_messageEditor->setVisualizeWhitespace(m_ui.actionVisualizeWhitespace->isChecked());
 --- a/src/linguist/linguist/mainwindow.h
 +++ b/src/linguist/linguist/mainwindow.h
-@@ -37,7 +37,6 @@ class ErrorsView;
+@@ -37,9 +37,6 @@ class ErrorsView;
  class FocusWatcher;
  class HelpClient;
  class UiFormPreviewView;
+-#ifndef Q_OS_WASM
 -class QmlFormPreviewView;
+-#endif // Q_OS_WASM
  class MessageEditor;
  class PhraseView;
  class SourceCodeView;
-@@ -139,7 +138,6 @@ private slots:
+@@ -141,9 +138,6 @@ private slots:
                    FindDialog::FindOptions options, int statusFilter);
      void revalidate();
      void showStatistics();
+-#ifndef Q_OS_WASM
 -    void toggleQmlPreview();
+-#endif // Q_OS_WASM
      void toggleVisualizeWhitespace();
      void onWhatsThis();
      void updatePhraseDicts();
-@@ -215,7 +213,6 @@ private:
+@@ -219,9 +213,6 @@ private:
      QTabWidget *m_contextAndLabelView;
      SourceCodeView *m_sourceCodeView;
      UiFormPreviewView *m_uiFormPreviewView;
+-#ifndef Q_OS_WASM
 -    QmlFormPreviewView *m_qmlFormPreviewView;
+-#endif // Q_OS_WASM
      ErrorsView *m_errorsView;
      QLabel *m_progressLabel;
      QLabel *m_modifiedLabel;
---- a/src/linguist/linguist/mainwindow.ui
-+++ b/src/linguist/linguist/mainwindow.ui
-@@ -98,7 +98,6 @@
-     </widget>
-     <addaction name="actionResetSorting"/>
-     <addaction name="actionDisplayGuesses"/>
--    <addaction name="actionQmlPreview"/>
-     <addaction name="actionLengthVariants"/>
-     <addaction name="actionVisualizeWhitespace"/>
-     <addaction name="separator"/>
-@@ -649,26 +648,6 @@
-     <enum>QAction::MenuRole::NoRole</enum>
-    </property>
-   </action>
--  <action name="actionQmlPreview">
--   <property name="checkable">
--    <bool>true</bool>
--   </property>
--   <property name="checked">
--    <bool>true</bool>
--   </property>
--   <property name="text">
--    <string>&amp;QML preview</string>
--   </property>
--   <property name="toolTip">
--    <string>Displays a preview of QML documents.</string>
--   </property>
--   <property name="whatsThis">
--    <string/>
--   </property>
--   <property name="menuRole">
--    <enum>QAction::MenuRole::NoRole</enum>
--   </property>
--  </action>
-   <action name="actionManual">
-    <property name="text">
-     <string>&amp;Manual</string>
