@@ -20,7 +20,8 @@ merge_binaries() {
       fi
       UNIVERSALBIN="${X86BIN}.universal"
       lipo -create "$X86BIN" "$ARMBIN" -output "$UNIVERSALBIN"
-      lipo "$UNIVERSALBIN" -verify_arch x86_64 arm64
+      lipo "$UNIVERSALBIN" -verify_arch x86_64
+      lipo "$UNIVERSALBIN" -verify_arch arm64
       mv "$UNIVERSALBIN" "$X86BIN"
     fi
   done
