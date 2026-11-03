@@ -117,6 +117,9 @@ cd "qtbase-everywhere-src-$QT"
 # Allow window-modal dialog boxes in Tahoe, it's not a problem for us.
 patch -p1 < "$SCRIPTDIR/patches/qtbase-window-modal-tahoe.patch"
 
+# os_sync_wait_on_address() is only available on macOS 14.4+, fall back to __ulock_wait2() on older versions.
+patch -p1 < "$SCRIPTDIR/patches/qtbase-futex-macos13-fallback.patch"
+
 cmake -B build "${CMAKE_COMMON[@]}" "${CMAKE_COMMON_QT[@]}" -DFEATURE_dbus=OFF -DFEATURE_framework=OFF -DFEATURE_icu=OFF -DFEATURE_opengl=OFF -DFEATURE_sql=OFF -DFEATURE_gssapi=OFF -DFEATURE_png=ON -DFEATURE_system_png=OFF -DFEATURE_jpeg=ON -DFEATURE_system_jpeg=OFF -DFEATURE_system_zlib=OFF -DFEATURE_freetype=ON -DFEATURE_system_freetype=OFF -DFEATURE_harfbuzz=ON -DFEATURE_system_harfbuzz=OFF -DFEATURE_brotli=OFF
 make -C build "-j$NPROCS"
 make -C build install

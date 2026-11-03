@@ -1,0 +1,136 @@
+--- a/src/corelib/thread/qfutex_mac_p.h
++++ b/src/corelib/thread/qfutex_mac_p.h
+@@ -22,12 +22,52 @@
+ 
+ #include <os/os_sync_wait_on_address.h>
+ 
++#include <errno.h>
++#include <stdint.h>
++#include <type_traits>
++
+ #define QT_ALWAYS_USE_FUTEX
+ 
++// os_sync_wait_on_address() and friends are only available on macOS 14.4+.
++// On older systems, fall back to the private __ulock_wait2()/__ulock_wake()
++// syscalls they are built on (available since macOS 11, also used by libc++).
++extern "C" {
++int __ulock_wait2(uint32_t operation, void *addr, uint64_t value, uint64_t timeout_ns,
++                  uint64_t value2);
++int __ulock_wake(uint32_t operation, void *addr, uint64_t wake_value);
++}
++
+ QT_BEGIN_NAMESPACE
+ 
+ namespace QtDarwinFutex {
+ 
++namespace Ulock {
++enum : uint32_t {
++    CompareAndWait = 1,
++    CompareAndWait64 = 5,
++    WakeAll = 0x00000100,
++    NoErrno = 0x01000000,
++};
++
++template <typename Atomic>
++constexpr uint32_t operation()
++{
++    return (sizeof(typename Atomic::Type) == 8 ? CompareAndWait64 : CompareAndWait) | NoErrno;
++}
++
++template <typename Atomic>
++inline uint64_t value(typename Atomic::Type v)
++{
++    using T = typename Atomic::Type;
++    if constexpr (std::is_pointer_v<T>)
++        return uint64_t(quintptr(v));
++    else // zero-extend, the kernel rejects 32-bit compare values with high bits set
++        return uint64_t(std::make_unsigned_t<T>(v));
++}
++} // namespace Ulock
++
++#define QT_FUTEX_MAC_HAS_OS_SYNC() __builtin_available(macOS 14.4, iOS 17.4, tvOS 17.4, watchOS 10.4, *)
++
+ constexpr bool futexAvailable() { return true; }
+ 
+ template <typename Atomic>
+@@ -35,8 +75,12 @@
+ {
+     QtTsan::futexRelease(&futex);
+     static_assert(sizeof(typename Atomic::Type) == 4 || sizeof(typename Atomic::Type) == 8);
+-    os_sync_wait_on_address(&futex, quint64(expectedValue), sizeof(typename Atomic::Type),
+-                            OS_SYNC_WAIT_ON_ADDRESS_NONE);
++    if (QT_FUTEX_MAC_HAS_OS_SYNC()) {
++        os_sync_wait_on_address(&futex, quint64(expectedValue), sizeof(typename Atomic::Type),
++                                OS_SYNC_WAIT_ON_ADDRESS_NONE);
++    } else {
++        __ulock_wait2(Ulock::operation<Atomic>(), &futex, Ulock::value<Atomic>(expectedValue), 0, 0);
++    }
+     QtTsan::futexAcquire(&futex);
+ }
+ 
+@@ -45,28 +89,57 @@
+ {
+     QtTsan::futexRelease(&futex);
+     static_assert(sizeof(typename Atomic::Type) == 4 || sizeof(typename Atomic::Type) == 8);
+-    int r = os_sync_wait_on_address_with_timeout(
+-            &futex, quint64(expectedValue), sizeof(typename Atomic::Type),
+-            OS_SYNC_WAIT_ON_ADDRESS_NONE, OS_CLOCK_MACH_ABSOLUTE_TIME, timer.remainingTimeNSecs());
++    bool woken;
++    if (QT_FUTEX_MAC_HAS_OS_SYNC()) {
++        int r = os_sync_wait_on_address_with_timeout(
++                &futex, quint64(expectedValue), sizeof(typename Atomic::Type),
++                OS_SYNC_WAIT_ON_ADDRESS_NONE, OS_CLOCK_MACH_ABSOLUTE_TIME, timer.remainingTimeNSecs());
++        woken = r >= 0 || errno != ETIMEDOUT;
++    } else {
++        // __ulock_wait2() treats a zero timeout as infinite
++        uint64_t timeout = 0;
++        if (!timer.isForever()) {
++            const qint64 remaining = timer.remainingTimeNSecs();
++            if (remaining <= 0) {
++                QtTsan::futexAcquire(&futex);
++                return false;
++            }
++            timeout = uint64_t(remaining);
++        }
++        int r = __ulock_wait2(Ulock::operation<Atomic>(), &futex,
++                              Ulock::value<Atomic>(expectedValue), timeout, 0);
++        woken = r != -ETIMEDOUT;
++    }
+     QtTsan::futexAcquire(&futex);
+-    return r >= 0 || errno != ETIMEDOUT;
++    return woken;
+ }
+ 
+ template <typename Atomic>
+ inline void futexWakeAll(Atomic &futex)
+ {
+     static_assert(sizeof(typename Atomic::Type) == 4 || sizeof(typename Atomic::Type) == 8);
+-    os_sync_wake_by_address_all(&futex, sizeof(typename Atomic::Type),
+-                                OS_SYNC_WAKE_BY_ADDRESS_NONE);
++    if (QT_FUTEX_MAC_HAS_OS_SYNC()) {
++        os_sync_wake_by_address_all(&futex, sizeof(typename Atomic::Type),
++                                    OS_SYNC_WAKE_BY_ADDRESS_NONE);
++    } else {
++        __ulock_wake(Ulock::operation<Atomic>() | Ulock::WakeAll, &futex, 0);
++    }
+ }
+ 
+ template <typename Atomic>
+ inline void futexWakeOne(Atomic &futex)
+ {
+     static_assert(sizeof(typename Atomic::Type) == 4 || sizeof(typename Atomic::Type) == 8);
+-    os_sync_wake_by_address_any(&futex, sizeof(typename Atomic::Type),
+-                                OS_SYNC_WAKE_BY_ADDRESS_NONE);
++    if (QT_FUTEX_MAC_HAS_OS_SYNC()) {
++        os_sync_wake_by_address_any(&futex, sizeof(typename Atomic::Type),
++                                    OS_SYNC_WAKE_BY_ADDRESS_NONE);
++    } else {
++        __ulock_wake(Ulock::operation<Atomic>(), &futex, 0);
++    }
+ }
++
++#undef QT_FUTEX_MAC_HAS_OS_SYNC
++
+ } //namespace QtDarwinFutex
+ 
+ namespace QtFutex = QtDarwinFutex;
